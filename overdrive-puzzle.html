@@ -1193,6 +1193,8 @@ function resetToGate() {
   document.getElementById('timer').textContent = '00:00';
   const rankEl = document.getElementById('winRank');
   if (rankEl) rankEl.remove();
+  const statusEl = document.getElementById('submitStatus');
+  if (statusEl) statusEl.remove();
 }
 
 function calculateScore(elapsedSeconds, hintsUsed) {
@@ -1212,6 +1214,45 @@ function rankFor(score) {
   return 'D · ROOKIE';
 }
 
+// === Google Sheets submission ===
+// Paste your Apps Script Web App URL between the quotes below.
+// Get it from: Extensions → Apps Script → Deploy → New deployment → Web app
+const SHEET_ENDPOINT = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+async function submitScoreToSheet(payload) {
+  if (!SHEET_ENDPOINT || SHEET_ENDPOINT.startsWith("PASTE_")) {
+    console.warn("SHEET_ENDPOINT not configured — skipping submission");
+    return false;
+  }
+  try {
+    // text/plain avoids a CORS preflight (Apps Script handles it as JSON anyway)
+    const res = await fetch(SHEET_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload),
+    });
+    return true;
+  } catch (err) {
+    console.error("Score submission failed:", err);
+    return false;
+  }
+}
+
+function setSubmitStatus(text, color) {
+  let el = document.getElementById('submitStatus');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'submitStatus';
+    el.style.cssText = 'font-family: "Space Mono", monospace; font-size: 10px; letter-spacing: .2em; text-transform: uppercase; margin-top: 12px; color: var(--ink); opacity: .7;';
+    const card = document.querySelector('.win-card');
+    const btn = document.getElementById('playAgainBtn');
+    card.insertBefore(el, btn);
+  }
+  el.textContent = text;
+  if (color) el.style.color = color;
+}
+
 function winGame() {
   clearInterval(state.timerHandle);
   const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
@@ -1219,6 +1260,7 @@ function winGame() {
   const s = String(elapsed % 60).padStart(2, '0');
   const hintsUsed = 4 - state.hints;
   const score = calculateScore(elapsed, hintsUsed);
+  const rank = rankFor(score);
 
   document.getElementById('winTime').textContent = `${m}:${s}`;
   document.getElementById('winHints').textContent = hintsUsed;
@@ -1233,26 +1275,37 @@ function winGame() {
   const counter = setInterval(() => {
     step++;
     const progress = step / steps;
-    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    const eased = 1 - Math.pow(1 - progress, 3);
     const current = Math.round(score * eased);
     scoreEl.textContent = current.toLocaleString();
     if (step >= steps) {
       clearInterval(counter);
       scoreEl.textContent = score.toLocaleString();
-      // Append rank below score after counting
       const existing = document.getElementById('winRank');
       if (existing) existing.remove();
-      const rank = document.createElement('div');
-      rank.id = 'winRank';
-      rank.style.cssText = 'font-family: "Space Mono", monospace; font-size: 11px; letter-spacing: .25em; color: var(--orange); margin-top: 4px; font-weight: 700;';
-      rank.textContent = '// RANK ' + rankFor(score);
-      scoreEl.parentNode.appendChild(rank);
+      const rankEl = document.createElement('div');
+      rankEl.id = 'winRank';
+      rankEl.style.cssText = 'font-family: "Space Mono", monospace; font-size: 11px; letter-spacing: .25em; color: var(--orange); margin-top: 4px; font-weight: 700;';
+      rankEl.textContent = '// RANK ' + rank;
+      scoreEl.parentNode.appendChild(rankEl);
     }
   }, interval);
 
   document.getElementById('winOverlay').classList.add('show');
   playWin();
   fireConfetti();
+
+  // Submit score to Google Sheet
+  setSubmitStatus('// saving score…', '#888');
+  submitScoreToSheet({
+    email: state.email,
+    score: score,
+    rank: rank,
+    timeSeconds: elapsed,
+    hintsUsed: hintsUsed,
+  }).then(ok => {
+    setSubmitStatus(ok ? '// score saved ✓' : '// save failed — try again later', ok ? null : '#FF4D13');
+  });
 }
 
 function fireConfetti() {
