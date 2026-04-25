@@ -1217,25 +1217,47 @@ function rankFor(score) {
 // === Google Sheets submission ===
 // Paste your Apps Script Web App URL between the quotes below.
 // Get it from: Extensions → Apps Script → Deploy → New deployment → Web app
-const SHEET_ENDPOINT = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+const SHEET_ENDPOINT = "https://script.google.com/macros/s/AKfycbyFvxgy5ac4DnGR35T3jlh-G3BkgJbWSmdp-T68jb_DUB4Hc7yOheWfD2wSfIZSw6pgSg/exec";
 
 async function submitScoreToSheet(payload) {
   if (!SHEET_ENDPOINT || SHEET_ENDPOINT.startsWith("PASTE_")) {
     console.warn("SHEET_ENDPOINT not configured — skipping submission");
-    return false;
+    return { ok: false, reason: 'not-configured' };
   }
+
+  // Strategy 1: Try a normal CORS request first. If the Apps Script handles
+  // CORS properly we get a real response and can confirm the save.
   try {
-    // text/plain avoids a CORS preflight (Apps Script handles it as JSON anyway)
     const res = await fetch(SHEET_ENDPOINT, {
       method: "POST",
-      mode: "no-cors",
+      // text/plain avoids a preflight; Apps Script reads the raw body either way
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload),
+      redirect: "follow",
     });
-    return true;
+    if (res.ok) {
+      const text = await res.text();
+      console.log("Score submission response:", text);
+      return { ok: true };
+    }
+    console.warn("Submission returned status", res.status);
+    return { ok: false, reason: 'status-' + res.status };
   } catch (err) {
-    console.error("Score submission failed:", err);
-    return false;
+    // Strategy 2: Fall back to no-cors. Browser hides the response, but the
+    // request still reaches Apps Script. We treat absence-of-throw as success.
+    console.log("CORS fetch failed, trying no-cors fallback:", err.message);
+    try {
+      await fetch(SHEET_ENDPOINT, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+      return { ok: true, reason: 'no-cors-fallback' };
+    } catch (err2) {
+      console.error("Both submission strategies failed:", err2);
+      return { ok: false, reason: err2.message };
+    }
   }
 }
 
@@ -1303,8 +1325,14 @@ function winGame() {
     rank: rank,
     timeSeconds: elapsed,
     hintsUsed: hintsUsed,
-  }).then(ok => {
-    setSubmitStatus(ok ? '// score saved ✓' : '// save failed — try again later', ok ? null : '#FF4D13');
+  }).then(result => {
+    if (result.ok) {
+      setSubmitStatus('// score saved ✓', null);
+    } else if (result.reason === 'not-configured') {
+      setSubmitStatus('// (sheet not configured)', '#888');
+    } else {
+      setSubmitStatus('// save failed — check console', '#FF4D13');
+    }
   });
 }
 
