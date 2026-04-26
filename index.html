@@ -586,6 +586,73 @@
     100% { background: rgba(208, 242, 85, 0.08); }
   }
 
+  /* === ALREADY PLAYED === */
+  .already-played {
+    border: 3px solid var(--paper);
+    background: var(--ink);
+    padding: 48px 28px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  @media (min-width: 720px) { .already-played { padding: 64px 48px; } }
+  .already-played::before {
+    content: "";
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 220px; height: 220px;
+    background: var(--orange);
+    border-radius: 50%;
+    opacity: .15;
+  }
+  .already-played > * { position: relative; z-index: 1; }
+  .already-played .ap-stamp {
+    display: inline-block;
+    background: var(--orange);
+    color: var(--ink);
+    padding: 6px 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .3em;
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 24px;
+  }
+  .already-played h2 {
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 44px;
+    line-height: .9;
+    text-transform: uppercase;
+    letter-spacing: -.02em;
+    color: var(--paper);
+    margin-bottom: 18px;
+  }
+  @media (min-width: 720px) { .already-played h2 { font-size: 60px; } }
+  .already-played .ap-email {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    color: var(--lime);
+    letter-spacing: .04em;
+    margin-bottom: 18px;
+    word-break: break-all;
+  }
+  .already-played .ap-lede {
+    font-size: 14px;
+    line-height: 1.5;
+    color: #c8c8c0;
+    max-width: 400px;
+    margin: 0 auto 28px;
+  }
+  .already-played .ap-foot {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .25em;
+    text-transform: uppercase;
+    color: #666;
+  }
+
   /* === WIN === */
   .win-overlay {
     position: fixed;
@@ -762,6 +829,17 @@
     </div>
   </div>
 
+  <!-- ALREADY PLAYED -->
+  <div id="alreadyPlayedScreen" class="screen" style="display: none;">
+    <div class="already-played">
+      <span class="ap-stamp">One Try Only</span>
+      <h2>You've already<br>played.</h2>
+      <p class="ap-email" id="apEmail"></p>
+      <p class="ap-lede">This puzzle allows one attempt per email. Your score is locked in on the leaderboard.</p>
+      <p class="ap-foot">// Pine Labs Overdrive · Jigsaw Challenge</p>
+    </div>
+  </div>
+
   <!-- GAME -->
   <div id="gameScreen" class="screen game">
     <div class="game-head">
@@ -850,19 +928,62 @@ let state = {
   cellW: 0,
   cellH: 0,
   selectedPiece: null,
+  hasPlayed: false,
 };
 
 function validEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()); }
 
-document.getElementById('startBtn').addEventListener('click', () => {
-  const email = document.getElementById('email').value.trim();
+async function checkEligibility(email) {
+  if (!SHEET_ENDPOINT || SHEET_ENDPOINT.startsWith("PASTE_")) {
+    return { ok: true, played: false }; // not configured = allow play
+  }
+  try {
+    const url = SHEET_ENDPOINT + '?check=' + encodeURIComponent(email);
+    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    if (!res.ok) return { ok: false, error: 'status-' + res.status };
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error('Eligibility check failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const email = document.getElementById('email').value.trim().toLowerCase();
   const err = document.getElementById('err');
+  const btn = document.getElementById('startBtn');
   if (!email) { err.textContent = '> Email required to enter.'; return; }
   if (!validEmail(email)) { err.textContent = '> That email looks invalid.'; return; }
+
   err.textContent = '';
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '… Checking eligibility';
+
+  const result = await checkEligibility(email);
+
+  btn.disabled = false;
+  btn.textContent = originalText;
+
+  if (result.played) {
+    showAlreadyPlayed(email);
+    return;
+  }
+  if (!result.ok) {
+    err.textContent = '> Could not verify eligibility. Try again.';
+    return;
+  }
+
   state.email = email;
   startGame();
 });
+
+function showAlreadyPlayed(email) {
+  document.getElementById('gateScreen').style.display = 'none';
+  document.getElementById('alreadyPlayedScreen').style.display = '';
+  document.getElementById('apEmail').textContent = email;
+}
 document.getElementById('email').addEventListener('keypress', e => {
   if (e.key === 'Enter') document.getElementById('startBtn').click();
 });
@@ -1188,13 +1309,22 @@ function resetToGate() {
   state.selectedPiece = null;
   document.getElementById('trayInner').innerHTML = '';
   document.getElementById('gameScreen').classList.remove('active');
-  document.getElementById('gateScreen').style.display = '';
   document.getElementById('winOverlay').classList.remove('show');
   document.getElementById('timer').textContent = '00:00';
   const rankEl = document.getElementById('winRank');
   if (rankEl) rankEl.remove();
   const statusEl = document.getElementById('submitStatus');
   if (statusEl) statusEl.remove();
+
+  // If the user already played and submitted, lock them out instead of returning to gate
+  if (state.email && state.hasPlayed) {
+    document.getElementById('gateScreen').style.display = 'none';
+    document.getElementById('alreadyPlayedScreen').style.display = '';
+    document.getElementById('apEmail').textContent = state.email;
+  } else {
+    document.getElementById('gateScreen').style.display = '';
+    document.getElementById('alreadyPlayedScreen').style.display = 'none';
+  }
 }
 
 function calculateScore(elapsedSeconds, hintsUsed) {
@@ -1230,7 +1360,6 @@ async function submitScoreToSheet(payload) {
   try {
     const res = await fetch(SHEET_ENDPOINT, {
       method: "POST",
-      // text/plain avoids a preflight; Apps Script reads the raw body either way
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload),
       redirect: "follow",
@@ -1238,7 +1367,14 @@ async function submitScoreToSheet(payload) {
     if (res.ok) {
       const text = await res.text();
       console.log("Score submission response:", text);
-      return { ok: true };
+      try {
+        const data = JSON.parse(text);
+        if (data.ok) return { ok: true };
+        if (data.error === 'already-played') return { ok: false, reason: 'already-played' };
+        return { ok: false, reason: data.error || 'unknown' };
+      } catch (parseErr) {
+        return { ok: true }; // got 200 but body wasn't JSON — treat as success
+      }
     }
     console.warn("Submission returned status", res.status);
     return { ok: false, reason: 'status-' + res.status };
@@ -1328,8 +1464,12 @@ function winGame() {
   }).then(result => {
     if (result.ok) {
       setSubmitStatus('// score saved ✓', null);
+      state.hasPlayed = true;
     } else if (result.reason === 'not-configured') {
       setSubmitStatus('// (sheet not configured)', '#888');
+    } else if (result.reason === 'already-played') {
+      setSubmitStatus('// already on the leaderboard — original score kept', '#888');
+      state.hasPlayed = true;
     } else {
       setSubmitStatus('// save failed — check console', '#FF4D13');
     }
